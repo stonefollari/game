@@ -11,6 +11,7 @@
     <body>
         <script src="./three.js/build/three.js"></script>
         <script src="./js/movement.js"></script>
+        <!-- <script src="./js/three.js"></script> -->
         <script src="./three.js/examples/js/controls/PointerLockControls.js"></script>
         <!-- <script src="./three.js/examples/js/controls/FirstPersonControls.js"></script> -->
 
@@ -27,7 +28,7 @@
 
             var clock = new THREE.Clock();
             let scene = new THREE.Scene();
-            let camera = new THREE.PerspectiveCamera(90, WW / WH, 0.1, 100000);
+            let camera = new THREE.PerspectiveCamera(100, WW / WH, 0.1, 100000);
             let renderer = new THREE.WebGLRenderer();
             renderer.setSize( WW, WH );
             body.appendChild( renderer.domElement ); // append renderer canvas

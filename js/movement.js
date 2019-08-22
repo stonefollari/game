@@ -1,8 +1,5 @@
 
 
-
-
-
 THREE.MovementControls = function( camera, domElement ){
 
     this.domElement = domElement || document.body;
@@ -13,18 +10,20 @@ THREE.MovementControls = function( camera, domElement ){
 
     // base
     let pos = camera.position;
-    let vel = new THREE.Vector3();
-    let acc = new THREE.Vector3();
-    let fric = new THREE.Vector3();
+    let vel = new THREE.Vector3( 0,0,0 );
+
+    let moveDirection = new THREE.Vector3();
 
     // modifier
-    let accel = 1.5;
-    let friction = -1;
-    let gravity = -.23;
-    let max_speed = 7;
-    let min_speed = 0.01
-    let max_vec = new THREE.Vector3( max_speed, Number.MAX_SAFE_INTEGER, max_speed );
-    let max_vec_n = new THREE.Vector3( -max_speed, Number.MIN_SAFE_INTEGER, -max_speed );
+    let acceleration = 2;
+    let air_acceleration = 0.2;
+    let friction = 1.9;
+    let air_friction = -0.1;
+    let gravity = -.7;
+    let terminal_velocity = 100;
+    let max_velocity = 20;
+    let min_velocity = 0.01;
+    let sneak_modifier = 0.5;
 
     let bound_min = new THREE.Vector3( -10000,0,-10000 );
     let bound_max = new THREE.Vector3( 10000,10000,10000 );
@@ -35,13 +34,12 @@ THREE.MovementControls = function( camera, domElement ){
     let moveRight = false;
     let moveJump = false;
     let canJump = true;
-    let jumpForce = 9;
-    let isWalking = false;
+    let jumpImpulse = 15;
+    let isSneaking = false;
     let moveKeyPress = false;
 
     let lookDir,lookDirNorm, faceDir, faceDirNorm, velDir;
     let zeroVector = new THREE.Vector3();
-    let upVector = new THREE.Vector3(0,1,0);
 
 
     this.update = function(){
@@ -53,57 +51,20 @@ THREE.MovementControls = function( camera, domElement ){
         /* Facing vectors */
         faceDir = lookDir.projectOnPlane( new THREE.Vector3( 0,1,0 ) ).normalize();
         faceDirNorm = lookDirNorm.projectOnPlane( new THREE.Vector3( 0,1,0 ) ).normalize();
-        velDir = vel.clone().normalize().setY(0);
         
-
-        /* Reset acceleration */
-        acc.copy( zeroVector );
-
-
-        // Add move forces to acc            
-        if( moveForward ){
-            acc.addScaledVector( faceDir, accel );
-        }
-        if( moveBackward ){
-            acc.addScaledVector( faceDir, -accel );
-        }
-        if( moveLeft ){
-            acc.addScaledVector( faceDirNorm, -accel );
-        }
-        if( moveRight ){
-            acc.addScaledVector( faceDirNorm, accel );
-        }
-        if( moveJump && canJump && onGround() ){
-            vel.addScaledVector( upVector, jumpForce );
-            canJump = false;
-        }
-
-        // Calculate friction force
-        fric = velDir.multiplyScalar(friction);
-        // Add friction to acc
-        acc.add( fric );
+        // // Reset Net Acceleration 
+        // acc.copy( zeroVector );
 
 
-        if( !onGround() ){
-            vel.addScaledVector( upVector, gravity );
-        }else{
-            vel.setY( Math.max( vel.y, 0 ));
-        }
-        
-        /* Add net acceleration to velocity */
-        vel.add( acc );
 
-        // If fric force is enough to halt
-        if( vel.length() < fric.length() ){
-            vel.copy( zeroVector ); // halt
-        }
+        moveDirection = getMoveDirection();
+        vel = moveAccelerate( vel, moveDirection );
+        pos = updatePosition( pos, vel );
 
-        vel.clamp( max_vec_n, max_vec ); // clamp max speed
+        console.log( Math.round(vel.length() ) );
 
-        /* Add velocity to position */
-        pos.add( vel );
 
-        pos.clamp( bound_min, bound_max ); // clamp position
+
 
 
 
@@ -114,6 +75,132 @@ THREE.MovementControls = function( camera, domElement ){
     function onGround(){
         return pos.y == 0;
     }
+
+    function inAir(){
+        return pos.y > 0;
+    }
+
+
+    function moveAccelerate( velocity, accel_dir ){
+        canJump = true;
+        if( onGround() && !moveJump ){
+            return groundAccelerate( velocity, accel_dir );
+        }else{
+            return airAccelerate( velocity, accel_dir );
+        }
+
+    }
+    function groundAccelerate( velocity, accel_dir ){
+
+        /* Calculate and Apply friction */
+        let speed = velocity.length();
+        if( speed > min_velocity ){
+            velocity.multiplyScalar( calcFriction( speed, friction ) ); // scale fric with speed
+        
+        /* If not moving and under velocity, halt */
+        }else if( !moveKeyPress ){
+            return velocity.copy(zeroVector);
+        }
+        if( isSneaking ){
+            velocity = accelerate( velocity, accel_dir, acceleration*sneak_modifier, max_velocity * sneak_modifier );
+        }else{
+            velocity = accelerate( velocity, accel_dir, acceleration, max_velocity );
+        }
+
+        /* Find new velocity */
+        return velocity;
+
+    }
+    function airAccelerate( velocity, accel_dir ){
+
+        /* Find new velocity */
+        if( isSneaking ){
+            velocity = accelerate( velocity, accel_dir, air_acceleration*sneak_modifier, max_velocity * sneak_modifier );
+        }else{
+            velocity = accelerate( velocity, accel_dir, air_acceleration, max_velocity );
+        }
+        /* Apply Gravity */
+        if( pos.y + velocity.y < 0 ){    // if going to hit ground next
+            pos.setY( 0 );
+            velocity.setY( 0 );
+
+        /* Apply Jump (instant impulse) */
+        }else if( onGround() && moveJump && canJump ){
+            velocity.setY( velocity.y + jumpImpulse ); // add initial vel in +y direction (Impulse)
+            canJump = false;
+        
+        /* Falling */
+        }else{
+            velocity.setY( calcGravity( velocity, gravity ) );
+        }
+
+        return velocity;
+
+    }
+
+    function calcGravity( velocity, gravity ){
+        if( velocity.y + gravity < terminal_velocity ){
+            return velocity.y + gravity;
+        }else{
+            return terminal_velocity;
+        }
+    }
+
+    /**
+     * Calculates Friction
+     * To make 0 friction, friction must be equal to speed.
+     * newVel *= speed*( 1+fric )
+     */
+    function calcFriction( speed, friction ){
+        return Math.max( ((speed * friction) - speed)/speed, 0 );
+    }
+
+
+    function accelerate( velocity, accel_dir, accel_rate, max_velocity ){
+
+        /* Source engine maximum velocity (limits accel) calculations */
+        // Allows bhopping / good movement feel.
+        let vel_proj = velocity.clone().setY(0).dot( accel_dir );
+        if( vel_proj + accel_rate > max_velocity ){
+            accel_rate = max_velocity - vel_proj ;
+            console.log( accel_rate );
+        }
+
+        return velocity.addScaledVector( accel_dir, accel_rate );
+    }
+
+
+    function getMoveDirection(){
+
+        /* Reset acceleration direction */
+        moveDirection.copy( zeroVector );
+
+        if( moveForward ){
+            moveDirection.add( faceDir );
+        }
+        if( moveBackward ){
+            moveDirection.addScaledVector( faceDir, -1 );
+        }
+        if( moveLeft ){
+            moveDirection.addScaledVector( faceDirNorm, -1 );
+        }
+        if( moveRight ){
+            moveDirection.add( faceDirNorm );
+        }
+        return moveDirection.normalize();   // TO-DO OPTIMIZE
+
+    }
+
+
+    function updatePosition( position, velocity ){
+        /* Add velocity to position */
+        position.add( velocity );
+
+        position.clamp( bound_min, bound_max ); // clamp position
+        return position;
+    }
+
+
 
 
 
@@ -147,7 +234,7 @@ THREE.MovementControls = function( camera, domElement ){
                 break;
 
             case 16: // shift
-                isWalking = true;
+                isSneaking = true;
                 break;
             
         }
@@ -180,7 +267,7 @@ THREE.MovementControls = function( camera, domElement ){
                 break;
 
             case 16: // shift
-                isWalking = false;
+                isSneaking = false;
                 break;
     
         }
@@ -239,83 +326,6 @@ THREE.MovementControls = function( camera ){
 THREE.MovementControls.prototype = Object.create( THREE.EventDispatcher.prototype );
 THREE.MovementControls.prototype.constructor = THREE.MovementControls;
 */
-
-/*
-// Class implementation. Not favorable since the way three.js is layed out (function based)
-
-class MovementControls{
-
-    constructor( camera ){
-    }
-    onKeyPress(){
-    }
-}
-*/
-
-
-var onKeyDown = function ( event ) {
-
-    switch ( event.keyCode ) {
-
-        case 38: // up
-        case 87: // w
-            moveForward = true;
-            break;
-
-        case 37: // left
-        case 65: // a
-            moveLeft = true;
-            break;
-
-        case 40: // down
-        case 83: // s
-            moveBackward = true;
-            break;
-
-        case 39: // right
-        case 68: // d
-            moveRight = true;
-            break;
-
-        case 32: // space
-            if ( canJump === true ) velocity.y += 350;
-            canJump = false;
-            break;
-
-    }
-
-};
-
-var onKeyUp = function ( event ) {
-
-    switch ( event.keyCode ) {
-
-        case 38: // up
-        case 87: // w
-            moveForward = false;
-            break;
-
-        case 37: // left
-        case 65: // a
-            moveLeft = false;
-            break;
-
-        case 40: // down
-        case 83: // s
-            moveBackward = false;
-            break;
-
-        case 39: // right
-        case 68: // d
-            moveRight = false;
-            break;
-
-    }
-
-};
-
-
-
 
 
 
